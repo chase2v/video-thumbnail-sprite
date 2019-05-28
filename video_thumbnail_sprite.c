@@ -23,10 +23,8 @@ typedef struct
     size_t pos;
 } buffer_data;
 
-int arrangeThumbnail(uint8_t *images[], SpriteImage *spriteImage, int rows)
+int arrangeThumbnail(uint8_t *images[], SpriteImage *spriteImg, int rows)
 {
-    printf("1111");
-
     int imagesLen = count;
     int cols = imagesLen / rows + 1;
     rows = imagesLen < rows ? imagesLen : rows;
@@ -40,7 +38,7 @@ int arrangeThumbnail(uint8_t *images[], SpriteImage *spriteImage, int rows)
         imageGroups[i / rows][i % rows] = images[i];
     }
 
-    spriteImage->data = (uint8_t *)av_malloc(cols * rows * uw * uh * 3 * sizeof(uint8_t));
+    spriteImg->data = (uint8_t *)av_malloc(cols * rows * uw * uh * 3 * sizeof(uint8_t));
 
     int len = 0;
     int cur = 0;
@@ -54,12 +52,12 @@ int arrangeThumbnail(uint8_t *images[], SpriteImage *spriteImage, int rows)
                 {
                     if (i * rows + k < imagesLen)
                     {
-                        *(spriteImage->data + len) = *(imageGroups[i][k] + j * uw * 3 + l);
+                        *(spriteImg->data + len) = *(imageGroups[i][k] + j * uw * 3 + l);
                     }
                     else
                     {
                         // 填充白色
-                        *(spriteImage->data + len) = 255;
+                        *(spriteImg->data + len) = 255;
                     }
                     len++;
                 }
@@ -67,19 +65,17 @@ int arrangeThumbnail(uint8_t *images[], SpriteImage *spriteImage, int rows)
         }
     }
 
-    spriteImage->size = len;
-    spriteImage->width = uw;
-    spriteImage->height = uh;
-    spriteImage->rows = cols;
-    spriteImage->count = imagesLen;
+    spriteImg->size = len;
+    spriteImg->width = uw * rows;
+    spriteImg->height = uh * cols;
+    spriteImg->rows = cols;
+    spriteImg->count = imagesLen;
 
     return 0;
 }
 
 int convertPixFmt(struct SwsContext *img_convert_ctx, AVFrame *frame, AVFrame *pFrameRGB)
 {
-    printf("1111");
-
     int w = frame->width;
     int h = frame->height;
 
@@ -96,21 +92,23 @@ int convertPixFmt(struct SwsContext *img_convert_ctx, AVFrame *frame, AVFrame *p
 	return 0;
 }
 
-int decodePacket(uint8_t *images[], AVCodecContext *avctx, struct SwsContext *swsCtx,
-                 AVFrame *frame, int *frameCount, AVPacket *pkt, int interval, int last)
+int decodePacket(uint8_t *images[], AVCodecContext *codecCtx, struct SwsContext *swsCtx,
+                 AVFrame *frame, int *frameCount, AVPacket *packet, int interval, int last)
 {
-    printf("1111");
-
     int len, gotFrame;
 
-    len = avcodec_decode_video2(avctx, frame, &gotFrame, pkt);
-    if (len < 0)
-    {
-        fprintf(stderr, "Error while decoding frame %d\n", *frameCount);
-        return len;
-    }
-    if (gotFrame && *frameCount % (avgFrameRate * interval) == 0)
-    {
+    if (avcodec_send_packet(codecCtx, packet))
+	{
+	    printf("%s %d avcodec_send_packet fail\n", __func__, __LINE__);
+		return -1;
+	}
+
+	if (avcodec_receive_frame(codecCtx, frame) < 0) {
+		// if (ret == AVERROR(EAGAIN)) printf("111");
+		// if (ret == AVERROR_EOF) printf("222");
+	    printf("%s %d avcodec_receive_frame fail, ret: %d\n", __func__, __LINE__);
+		return -1;
+	} else if (*frameCount % (avgFrameRate * interval) == 0) {
         printf("Saving %sframe %3d, %d\n", last ? "last " : "", *frameCount, count);
         fflush(stdout);
 
@@ -126,10 +124,10 @@ int decodePacket(uint8_t *images[], AVCodecContext *avctx, struct SwsContext *sw
 
     (*frameCount)++;
 
-    if (pkt->data)
+    if (packet->data)
     {
-        pkt->size -= len;
-        pkt->data += len;
+        packet->size -= len;
+        packet->data += len;
     }
 
     return 0;
@@ -147,41 +145,41 @@ int initDecoder(AVStream *stream, AVCodecContext *codecCtx, AVCodec *codec,
         return AVERROR(EINVAL);
     }
 
-    // codecCtx = avcodec_alloc_context3(NULL);
-    // if (!codecCtx)
-    // {
-    //     fprintf(stderr, "Could not allocate video codec context\n");
-    //     exit(1);
-    // }
+    codecCtx = avcodec_alloc_context3(NULL);
+    if (!codecCtx)
+    {
+        fprintf(stderr, "Could not allocate video codec context\n");
+        exit(1);
+    }
 
-    // /* Copy codec parameters from input stream to output codec context */
-    // if (avcodec_parameters_to_context(codecCtx, stream->codecpar) < 0)
-    // {
-    //     fprintf(stderr, "Failed to copy %s codec parameters to decoder context\n",
-    //             av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
-    //     return -1;
-    // }
+    /* Copy codec parameters from input stream to output codec context */
+    if (avcodec_parameters_to_context(codecCtx, stream->codecpar) < 0)
+    {
+        fprintf(stderr, "Failed to copy %s codec parameters to decoder context\n",
+                av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
+        return -1;
+    }
 
-    // /* open it */
-    // if (avcodec_open2(codecCtx, codec, NULL) < 0)
-    // {
-    //     fprintf(stderr, "Could not open codec\n");
-    //     exit(1);
-    // }
+    /* open it */
+    if (avcodec_open2(codecCtx, codec, NULL) < 0)
+    {
+        fprintf(stderr, "Could not open codec\n");
+        exit(1);
+    }
 
-    // swsCtx = sws_getContext(
-    //     codecCtx->width,
-    //     codecCtx->height,
-    //     codecCtx->pix_fmt || AV_PIX_FMT_YUV420P,
-    //     codecCtx->width,
-    //     codecCtx->height,
-    //     AV_PIX_FMT_RGB24,
-    //     SWS_BICUBIC, NULL, NULL, NULL);
-    // if (swsCtx == NULL)
-    // {
-    //     fprintf(stderr, "Cannot initialize the conversion context\n");
-    //     exit(1);
-    // }
+    swsCtx = sws_getContext(
+        codecCtx->width,
+        codecCtx->height,
+        codecCtx->pix_fmt || AV_PIX_FMT_YUV420P,
+        codecCtx->width,
+        codecCtx->height,
+        AV_PIX_FMT_RGB24,
+        SWS_BICUBIC, NULL, NULL, NULL);
+    if (swsCtx == NULL)
+    {
+        fprintf(stderr, "Cannot initialize the conversion context\n");
+        exit(1);
+    }
 
     return 0;
 }
@@ -227,7 +225,7 @@ int initInput(char *inputFilename, AVFormatContext *fmtCtx, int *streamIndex,
 
 int main(int argc, char *argv[])
 {
-    SpriteImage *spriteImg;
+    SpriteImage spriteImg = {0};
     struct SwsContext *swsCtx;
     AVFormatContext *fmtCtx = NULL;
     AVStream *stream = NULL;
@@ -248,15 +246,48 @@ int main(int argc, char *argv[])
     }
     inputFilename = argv[1];
     outputFilename = argv[2];
-    interval = argv[3];
-    cols = argv[4];
+    interval = atoi(argv[3]);
+    cols = atoi(argv[4]);
 
     /* init input */
-    if (initInput(inputFilename, fmtCtx, &streamIndex, frame, &packet) < 0)
+    // if (initInput(inputFilename, fmtCtx, &streamIndex, frame, &packet) < 0)
+    // {
+    //     fprintf(stderr, "Failed to init input");
+    //     exit(1);
+    // }
+
+    /* open input */
+    if (avformat_open_input(&fmtCtx, "./example.mp4", NULL, NULL) < 0)
     {
-        fprintf(stderr, "Failed to init input");
+        fprintf(stderr, "Could not open input\n");
         exit(1);
     }
+
+    /* retrieve stream information */
+    if (avformat_find_stream_info(fmtCtx, NULL) < 0)
+    {
+        fprintf(stderr, "Could not find stream information\n");
+        exit(1);
+    }
+
+    streamIndex = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    if (streamIndex < 0)
+    {
+        fprintf(stderr, "Could not find %s stream in input file '%s'\n",
+                av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
+        exit(1);
+    }
+
+    /* dump input information to stderr */
+    av_dump_format(fmtCtx, 0, inputFilename, 0);
+
+    frame = av_frame_alloc();
+    if (!frame)
+    {
+        fprintf(stderr, "Could not allocate video frame\n");
+        exit(1);
+    }
+    av_init_packet(&packet);
 
     printf("stream index is: %d\n", streamIndex);
     stream = fmtCtx->streams[streamIndex];
@@ -266,9 +297,52 @@ int main(int argc, char *argv[])
     uint8_t *images[duration / (timebase * interval)];
 
     /* init decoder */
-    if (initDecoder(stream, codecCtx, codec, swsCtx) < 0)
+    // if (initDecoder(stream, codecCtx, codec, swsCtx) < 0)
+    // {
+    //     fprintf(stderr, "Failed to init decoder");
+    //     exit(1);
+    // }
+    codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!codec)
     {
-        fprintf(stderr, "Failed to init decoder");
+        fprintf(stderr, "Failed to find %s codec\n",
+                av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
+        return AVERROR(EINVAL);
+    }
+
+    codecCtx = avcodec_alloc_context3(NULL);
+    if (!codecCtx)
+    {
+        fprintf(stderr, "Could not allocate video codec context\n");
+        exit(1);
+    }
+
+    /* Copy codec parameters from input stream to output codec context */
+    if (avcodec_parameters_to_context(codecCtx, stream->codecpar) < 0)
+    {
+        fprintf(stderr, "Failed to copy %s codec parameters to decoder context\n",
+                av_get_media_type_string(AVMEDIA_TYPE_VIDEO));
+        return -1;
+    }
+
+    /* open it */
+    if (avcodec_open2(codecCtx, codec, NULL) < 0)
+    {
+        fprintf(stderr, "Could not open codec\n");
+        exit(1);
+    }
+
+    swsCtx = sws_getContext(
+        codecCtx->width,
+        codecCtx->height,
+        codecCtx->pix_fmt || AV_PIX_FMT_YUV420P,
+        codecCtx->width,
+        codecCtx->height,
+        AV_PIX_FMT_RGB24,
+        SWS_BICUBIC, NULL, NULL, NULL);
+    if (swsCtx == NULL)
+    {
+        fprintf(stderr, "Cannot initialize the conversion context\n");
         exit(1);
     }
 
@@ -282,8 +356,7 @@ int main(int argc, char *argv[])
     {
         if (packet.stream_index == streamIndex)
         {
-            if (decodePacket(images, codecCtx, swsCtx, frame, &frameCount,
-                             &packet, interval, 0) < 0)
+            if (decodePacket(images, codecCtx, swsCtx, frame, &frameCount, &packet, interval, 0) < 0)
             {
                 exit(1);
             }
@@ -295,12 +368,13 @@ int main(int argc, char *argv[])
     packet.size = 0;
     decodePacket(images, codecCtx, swsCtx, frame, &frameCount, &packet, interval, 1);
 
+    arrangeThumbnail(images, &spriteImg, cols);
+
     // save image
-    saveBMP(spriteImg, outputFilename);
+    saveBMP(outputFilename, &spriteImg);
 
 end:
-    free(spriteImg->data);
-    free(spriteImg);
+    free(spriteImg.data);
     sws_freeContext(swsCtx);
     avcodec_free_context(&codecCtx);
     av_frame_free(&frame);
